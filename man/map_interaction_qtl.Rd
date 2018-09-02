@@ -6,8 +6,8 @@
 \usage{
 map_interaction_qtl(input, genotype, geneloc, snploc, anno,
   sample_kernel = NULL, normalization_approach = "qq",
-  permutation_approach = "boot", cisdist = 1e+05, checkpoint_dir = NULL,
-  debug = F)
+  permutation_approach = "boot", cisdist = 1e+05,
+  checkpoint_dir = NULL, debug = F)
 }
 \arguments{
 \item{input}{[genes x samples] matrix of log_2 expression values, e.g. cpm or fpkm}

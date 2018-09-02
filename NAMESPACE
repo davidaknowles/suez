@@ -2,9 +2,12 @@
 
 export(learn_covariance)
 export(map_interaction_qtl)
+import(Rcpp)
 import(doMC)
 import(dplyr)
 import(magrittr)
+import(methods)
 import(rstan)
+import(rstantools)
 importFrom(rstan,optimizing)
 useDynLib(suez, .registration = TRUE)

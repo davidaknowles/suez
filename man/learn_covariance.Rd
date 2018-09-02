@@ -4,7 +4,7 @@
 \alias{learn_covariance}
 \title{Function to learn covariance structure across samples using latent factors}
 \usage{
-learn_covariance(input, anno, P = 20, kinship_matrix = NULL,
+learn_covariance(input, anno, kinship_matrix = NULL, P = 20,
   iterations = 200, same_ind_initial_weight = 0.01,
   kinship_matrix_initial_weight = 0.01)
 }
@@ -13,9 +13,9 @@ learn_covariance(input, anno, P = 20, kinship_matrix = NULL,
 
 \item{anno}{[samples x 2] data.frame with `individual` and `condition` columns. If a kinship matrix is provided the row and column names must correspond to the values used in the `individual` column.}
 
-\item{P}{Number of latent factors to model. suez can prune out unnecessary factors (in principle).}
-
 \item{kinship_matrix}{Representing relatedness between individuals. Optional.}
+
+\item{P}{Number of latent factors to model. suez can prune out unnecessary factors (in principle).}
 
 \item{iterations}{Max iterations of LBFGS to run}
 
