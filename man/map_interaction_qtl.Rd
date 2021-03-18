@@ -4,15 +4,26 @@
 \alias{map_interaction_qtl}
 \title{Response (e)QTL mapping}
 \usage{
-map_interaction_qtl(input, genotype, geneloc, snploc, anno,
-  sample_kernel = NULL, normalization_approach = "qq",
-  permutation_approach = "boot", cisdist = 1e+05,
-  checkpoint_dir = NULL, debug = F)
+map_interaction_qtl(
+  input,
+  genotype,
+  geneloc,
+  snploc,
+  anno,
+  sample_kernel = NULL,
+  normalization_approach = "qq",
+  permutation_approach = "boot",
+  cisdist = 1e+05,
+  checkpoint_dir = NULL,
+  debug = F,
+  genome_build = "GRCh38",
+  maf_threshold = 0
+)
 }
 \arguments{
 \item{input}{[genes x samples] matrix of log_2 expression values, e.g. cpm or fpkm}
 
-\item{genotype}{[SNPs x individuals] matrix of genotypes (can have some NAs)}
+\item{genotype}{[SNPs x individuals] matrix of genotypes (can have some NAs) OR a Bioconductor `TabixFile`` object}
 
 \item{geneloc}{[genes x 4] data.frame with columns (geneid, chr, left, right). The intersect of geneloc$geneid and rownames(input) will be tested.}
 
@@ -31,6 +42,10 @@ map_interaction_qtl(input, genotype, geneloc, snploc, anno,
 \item{checkpoint_dir}{An optional directory to store per gene results. If mapping crashes these results will be reused to save time.}
 
 \item{debug}{Controls whether you see stan::optimizing messages and whether errors are suppressed.}
+
+\item{genome_build}{Only required if `genotype` is `TabixFile`. Default is "GRCh38"}
+
+\item{maf_threshold}{Minimum MAF to analyze variants.}
 }
 \description{
 Response (e)QTL mapping

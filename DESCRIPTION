@@ -14,7 +14,7 @@ Imports: rstan (>= 2.16.2),
 	 magrittr, 
 	 doMC
 LinkingTo: StanHeaders (>= 2.16.0.1), rstan (>= 2.16.2), BH (>= 1.65.0.1), Rcpp (>= 0.12.12), RcppEigen (>= 0.3.3.3.0)
-RoxygenNote: 6.1.0
+RoxygenNote: 7.1.0
 NeedsCompilation: yes
 SystemRequirements: GNU make
 Encoding: UTF-8

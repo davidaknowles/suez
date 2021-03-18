@@ -16,6 +16,11 @@ fix_diag=function(x) {
   if(length(x)==1) matrix(x) else diag(x)
 }
 
+unscale = function(x) {
+  x = sweep(x, 1, attr(x, "scaled:scale"), "*")
+  sweep(x, 1, attr(x, "scaled:center"), "+")
+}
+
 #' Simple SVD based imputation of missing genotypes
 #'
 #' @param geno [samples] x [SNPs] genotype matrix (0/1/2)
@@ -60,10 +65,33 @@ quantile_normalize=function(input) {
   apply(input, 1, qqnorm_no_plot) %>% t()
 }
 
+get_cis_geno <- function(genotype, chrom, left, right, snploc, genome_build, ...){ UseMethod('get_cis_geno') }
+
+get_cis_geno.TabixFile = function(genotype, chrom, left, right, snploc, genome_build, ...) {
+  gr = GRanges(chrom, IRanges(left, right))
+  sp = ScanVcfParam(which = gr)
+  vcf = readVcf(genotype, genome_build, param = sp)
+  gt = geno(vcf)$GT
+  if (nrow(gt) == 0) return(NULL)
+  allele1 = substr(gt, 1, 1)
+  class(allele1) = "numeric"
+  allele2 = substr(gt, 3, 3)
+  class(allele2) = "numeric"
+  allele1 + allele2
+}
+                
+get_cis_geno.matrix = function(genotype, chrom, left, right, snploc, genome_build, ...) {
+  cis_snps=snploc %>%
+    filter(chr == chrom, left < pos, right > pos) %>%
+    .$snpid %>%
+    as.character()
+  if (length(cis_snps)==0) NULL else genotype[cis_snps,,drop=F]
+}
+
 #' Response (e)QTL mapping
 #'
 #' @param input [genes x samples] matrix of log_2 expression values, e.g. cpm or fpkm
-#' @param genotype [SNPs x individuals] matrix of genotypes (can have some NAs)
+#' @param genotype [SNPs x individuals] matrix of genotypes (can have some NAs) OR a Bioconductor `TabixFile`` object
 #' @param geneloc [genes x 4] data.frame with columns (geneid, chr, left, right). The intersect of geneloc$geneid and rownames(input) will be tested.
 #' @param snploc [SNPs x 3] data.frame with columns (snpid, chr, pos) where snpid's map to rows of `genotype`
 #' @param anno [samples x 2] data.frame with columns (individual, condition) where individual must correspond to column names of `genotype`
@@ -73,12 +101,15 @@ quantile_normalize=function(input) {
 #' @param cisdist How far from the gene boundaries to look for SNPs to test
 #' @param checkpoint_dir An optional directory to store per gene results. If mapping crashes these results will be reused to save time.
 #' @param debug Controls whether you see stan::optimizing messages and whether errors are suppressed.
+#' @param genome_build Only required if `genotype` is `TabixFile`. Default is "GRCh38"
+#' @param maf_threshold Minimum MAF to analyze variants. 
 #' @importFrom rstan optimizing
 #' @import dplyr
+#' @import readr
 #' @import doMC
 #' @useDynLib suez, .registration = TRUE
 #' @export
-map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_kernel=NULL, normalization_approach="qq", permutation_approach="boot", cisdist=1e5, checkpoint_dir=NULL, debug=F) {
+map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_kernel=NULL, normalization_approach="qq", permutation_approach="boot", cisdist=1e5, checkpoint_dir=NULL, debug=F, genome_build= "GRCh38", maf_threshold = 0) {
 
   if (normalization_approach=="qq") {
     input=quantile_normalize(input)
@@ -89,7 +120,10 @@ map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_ke
   } else if (normalization_approach !="none" ) {
     stop(paste0("Invalid normalization_approach:",normalization_approach))
   }
+  
+  geneloc = as.data.frame(geneloc) # code doesn't work with tibble
 
+  cat("Checkpoint dir:", checkpoint_dir, "\n")
   if (!is.null(checkpoint_dir)) dir.create(checkpoint_dir, recursive = T, showWarnings = F)
 
   genes=intersect(rownames(input),geneloc$geneid)
@@ -100,7 +134,8 @@ map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_ke
     class(sample_kernel)="numeric"
   }
 
-  eigen_sample_kernel=eigen(sample_kernel)
+  cat("Performing initial eigendecomposition...\n")
+  eigen_sample_kernel=eigen(sample_kernel, symmetric = T)
 
   anno = anno %>% mutate(condition=as.factor(condition))
   no_geno = model.matrix( ~ condition, data=anno) # [,2:5]
@@ -122,34 +157,45 @@ map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_ke
   foreach(gene=genes, .errorhandling=errorhandling, .combine = bind_rows) %do% {
 
     if (!is.null(checkpoint_dir)){
-      check_fn=paste0(checkpoint_dir,gene,".txt.gz")
+      check_fn = paste0(checkpoint_dir,gene,".txt.gz")
       if (file.exists(check_fn)) {
-        return(read.table(check_fn, header=T, stringsAsFactors = F, sep="\t"))
+        return(read_tsv(check_fn))
       }
     }
-
-    cis_snps=snploc %>%
-      filter(chr==geneloc[gene,"chr"],
-             (geneloc[gene,"left"]-cisdist) < pos,
-             (geneloc[gene,"right"]+cisdist) > pos) %>%
-      .$snpid %>%
-      as.character()
+    
+    geno_here = get_cis_geno(genotype, 
+                              chrom = geneloc[gene,"chr"], 
+                              left = geneloc[gene,"left"]-cisdist, 
+                              right = geneloc[gene,"right"]+cisdist, 
+                              snploc = snploc,
+                              genome_build = genome_build)
+    if (is.null(geno_here)) return(NULL)
+    
+    imp_geno = easy_impute(geno_here)
+    if (maf_threshold > 0) {
+      mafs = rowMeans(geno_here, na.rm=T)/2 # calculate on unimputed
+      imp_geno = imp_geno[mafs > maf_threshold,,drop=F]
+      if (nrow(imp_geno)==0) return(NULL)
+    }
+    
+    cis_snps = rownames(imp_geno)
     cat(gene,length(cis_snps)," cis snps\n")
-
-    if (length(cis_snps)==0) return(NULL)
+    
+    if (permutation_approach=="permute") colnames(imp_geno)=colnames(imp_geno)[ sample(ncol(imp_geno),ncol(imp_geno)) ]
 
     y=input[gene,] %>% as.numeric
     y=y-mean(y)
-
-    imp_geno=easy_impute(genotype[cis_snps,,drop=F])
-
-    if (permutation_approach=="permute") colnames(imp_geno)=colnames(imp_geno)[ sample(ncol(imp_geno),ncol(imp_geno)) ]
-
-    data=list(N=N,U_transpose_x=t(eigen_sample_kernel$vectors) %*% no_geno,P=ncol(no_geno), U_transpose_y=t(eigen_sample_kernel$vectors) %*% y %>% as.numeric, lambda=eigen_sample_kernel$values)
+    
+    data=list(N=N,
+              U_transpose_x=t(eigen_sample_kernel$vectors) %*% no_geno,
+              P=ncol(no_geno), 
+              U_transpose_y=t(eigen_sample_kernel$vectors) %*% y %>% as.numeric, 
+              lambda=eigen_sample_kernel$values)
 
     init=list(sigma2=0.1, sigma2_k=1.0, beta=lm(y ~ no_geno - 1) %>% coef )
 
-    fit_no_geno=stan_optimizing_wrapper(stanmodels$suez_step_2, data, init=init, as_vector=F)
+    if (debug) cat("Fitting no genotype model...\n")
+    fit_no_geno=stan_optimizing_wrapper(stanmodels$suez_step_2, data, init=init, as_vector=F, verbose = debug)
 
     gene_results = foreach(cis_snp=cis_snps, .errorhandling=errorhandling, .combine = bind_rows) %dopar% {
 
@@ -165,7 +211,7 @@ map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_ke
         fit_geno=stan_optimizing_wrapper(stanmodels$suez_step_2, data, init=init, as_vector=F )
 
         interact=model.matrix(~geno:condition,data=anno)
-        interact=interact[,3:ncol(interact)]
+        interact=interact[,3:ncol(interact),drop=F]
         data_interact=data
         data_interact$U_transpose_x=t(eigen_sample_kernel$vectors) %*% cbind( no_geno, geno, interact )
         data_interact$P=ncol(data_interact$U_transpose_x)
@@ -198,10 +244,8 @@ map_interaction_qtl = function(input, genotype, geneloc, snploc, anno, sample_ke
       res
     }
     if (!is.null(checkpoint_dir)){
-      print("Saving results")
-      checkpoint_file= gzfile( check_fn,"w")
-      gene_results %>% format(digits=5) %>% write.table(checkpoint_file, quote = F, row.names = F, col.names = T, sep="\t")
-      close(checkpoint_file)
+      cat("Saving results to ", checkpoint_dir, "\n")
+      gene_results %>% write_tsv(check_fn)
     }
 
     gene_results

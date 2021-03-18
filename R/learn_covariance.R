@@ -6,12 +6,13 @@
 #' @param anno [samples x 2] data.frame with `individual` and `condition` columns. If a kinship matrix is provided the row and column names must correspond to the values used in the `individual` column. 
 #' @param P Number of latent factors to model. suez can prune out unnecessary factors (in principle). 
 #' @param kinship_matrix Representing relatedness between individuals. Optional. 
-#' @param iterations Max iterations of LBFGS to run
 #' @param same_ind_initial_weight Initialization. 
 #' @param kinship_matrix_initial_weight Initialization.
+#' @param ... passed to rstan::optimizing
 #' @import rstan
+#' @import doMC
 #' @export
-learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, iterations=200, same_ind_initial_weight=0.01, kinship_matrix_initial_weight=0.01 )
+learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, same_ind_initial_weight=0.01, kinship_matrix_initial_weight=0.01, ... )
 {
   
   self_outer=function(g) outer(g,g)
@@ -21,7 +22,7 @@ learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, iterations=2
   b=solve( t(X) %*% X, t(X) %*% t(input) )
   resi = input - t(X %*% b)
   
-  svd_ge=svd(input)
+  svd_ge=svd(resi)
   
   # Latent factors initialized using SVD
   x_adjustable=foreach(p=1:P) %do% { svd_ge$v[,p] }
@@ -30,7 +31,9 @@ learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, iterations=2
   same_ind=outer(anno$individual, anno$individual, "==") * 1
   same_condition=outer(anno$condition, anno$condition, "==") * 1
   
-  variance_components=list( isotropic_noise=diag(ncol(input)), same_ind=same_ind, same_condition=same_condition)
+  variance_components=list( isotropic_noise=diag(ncol(input)), 
+                           same_ind=same_ind, 
+                           same_condition=same_condition)
   # residual after removing first P PCs (used to estimate noise variance)
   rr = resi - svd_ge$u[,1:P] %*% diag(svd_ge$d[1:P]) %*% t(svd_ge$v[,1:P])
   variance_component_weights=c( mean(rr^2), same_ind_initial_weight, mean(b^2) )
@@ -40,11 +43,20 @@ learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, iterations=2
     variance_component_weights=c(variance_component_weights, kinship_matrix_initial_weight)
   }
 
-  dat=list(y=resi, N=ncol(input), G=nrow(input), P=length(variance_components), x=variance_components, P_adjustable=length(x_adjustable))
+  dat=list(y=resi, 
+           N=ncol(input), 
+           G=nrow(input), 
+           P=length(variance_components), 
+           x=variance_components, 
+           P_adjustable=length(x_adjustable))
 
   init=list( s_adjustable=sinit[1:P], s=variance_component_weights, x_adjustable=x_adjustable )
   
-  optimized_fit=optimizing(stanmodels$suez_step_1, data=dat, init=init, verbose=T, as_vector=F, iter=iterations)
+  optimized_fit=optimizing(stanmodels$suez_step_1, 
+                           data=dat, 
+                           init=init, 
+                           as_vector=F, 
+                           ...)
   
   names(optimized_fit$par$s) = names(variance_components)
   
@@ -57,5 +69,5 @@ learn_covariance = function(input, anno, kinship_matrix=NULL, P=20, iterations=2
     cov_suez = cov_suez + optimized_fit$par$s["kinship_matrix"] * variance_components[["kinship_matrix"]]
   }
   
-  cov_suez
+  list( cov_suez = cov_suez, optimized_fit = optimized_fit )
 }
